@@ -83,36 +83,95 @@ async function runEvidenceInspection(submissions: ReviewSubmission[], adapter: G
   console.log(renderGithubEvidenceSection(bySubmission));
 }
 
+export interface PrintReviewOptions {
+  /** Set for a live Gibwork review -- drops the (otherwise true) "fixture mode" footer note. */
+  live?: boolean;
+  /** Shown directly under the requirements line in the full summary; not shown in --inspect mode. */
+  generalRequirementsNotice?: string;
+  withReasoning: boolean;
+  reasoningProvider: ReasoningProvider;
+  /** A report "#N" display number or a literal submission ID. When set, this becomes a
+   *  focused single-submission drill-down instead of the full summary. */
+  inspect?: string;
+}
+
 /**
- * Shared by fixture and live review: resolves --inspect's reference (a report "#N"
- * display number or a literal submission ID) against the just-computed assessments and
- * prints the full evidence-backed breakdown for that one submission. A no-op when
- * `ref` is undefined -- --inspect is always opt-in, on top of the compact summary.
+ * Shared by fixture and live review -- the single place that decides what a review run
+ * actually prints. Without --inspect this is unchanged from before: the full summary,
+ * then (if --reasoning) every router-flagged submission's reasoning. With --inspect this
+ * is a drill-down, not an addition: the full summary is skipped entirely in favor of one
+ * submission's full evidence-backed breakdown, and if --reasoning is also set, the
+ * provider is asked about (and only about) that one submission -- never every submission
+ * in the bounty. `assessments` are only ever read here, never recomputed or mutated --
+ * reasoning stays advisory regardless of which mode this renders.
  */
-function printInspectionIfRequested(
+export async function printReview(
   task: ReviewTask,
   requirements: Requirement[],
+  submissions: ReviewSubmission[],
   assessments: SubmissionAssessment[],
-  ref: string | undefined,
-): void {
-  if (!ref) return;
+  options: PrintReviewOptions,
+  buildProvider: (kind: ReasoningProvider) => LLMProvider,
+  githubAdapter?: GithubEvidenceAdapter,
+): Promise<void> {
+  const logMockNoticeIfNeeded = (): void => {
+    if (options.reasoningProvider === 'mock') {
+      console.log(
+        '\nNote: --reasoning uses a local, deterministic mock provider only. No LLM API, SDK, key, or network call is involved.\n',
+      );
+    }
+  };
 
-  const summary = buildReviewSummary({ task, requirements, assessments });
-  const entry = findEntryByRef(summary.entries, ref);
-  if (!entry) {
-    console.log(
-      `\nNo submission matching "${ref}" was found in this review ` +
-        `(${summary.entries.length} submission(s), numbered #1-#${summary.entries.length}).`,
-    );
-    process.exitCode = 1;
+  if (options.inspect) {
+    const summary = buildReviewSummary({ task, requirements, assessments });
+    const entry = findEntryByRef(summary.entries, options.inspect);
+    if (!entry) {
+      console.log(
+        `\nNo submission matching "${options.inspect}" was found in this review ` +
+          `(${summary.entries.length} submission(s), numbered #1-#${summary.entries.length}).`,
+      );
+      process.exitCode = 1;
+      return;
+    }
+
+    console.log(renderSubmissionInspection(entry, task, requirements));
+
+    if (options.withReasoning) {
+      const submission = submissions.find((item) => item.id === entry.submissionId);
+      if (submission) {
+        logMockNoticeIfNeeded();
+        const provider = buildProvider(options.reasoningProvider);
+        const reasoning = await applyReasoning(submission, requirements, entry.assessment, provider, githubAdapter);
+        console.log(renderReasoningSummary(new Map([[submission.id, reasoning]])));
+      }
+    }
     return;
   }
 
-  console.log('');
-  console.log(renderSubmissionInspection(entry, task, requirements));
+  console.log(
+    renderReviewReport(
+      { task, requirements, assessments },
+      {
+        ...(options.live !== undefined ? { live: options.live } : {}),
+        ...(options.generalRequirementsNotice ? { generalRequirementsNotice: options.generalRequirementsNotice } : {}),
+      },
+    ),
+  );
+
+  if (options.withReasoning) {
+    logMockNoticeIfNeeded();
+    const provider = buildProvider(options.reasoningProvider);
+    const reasoningById = new Map<string, SubmissionReasoning>();
+    for (const submission of submissions) {
+      const assessment = assessments.find((item) => item.submissionId === submission.id);
+      if (!assessment) continue;
+      reasoningById.set(submission.id, await applyReasoning(submission, requirements, assessment, provider, githubAdapter));
+    }
+    console.log(renderReasoningSummary(reasoningById));
+  }
 }
 
-async function runFixtureReview(
+export async function runFixtureReview(
   fixturePath: string,
   withReasoning: boolean,
   reasoningProvider: ReasoningProvider,
@@ -130,28 +189,17 @@ async function runFixtureReview(
     assessments.push(await evaluator.evaluate(task, submission));
   }
 
-  console.log(renderReviewReport({ task, requirements, assessments }));
-  printInspectionIfRequested(task, requirements, assessments, inspect);
-
   const githubAdapter = inspectEvidence ? new GithubEvidenceAdapter() : undefined;
 
-  if (withReasoning) {
-    if (reasoningProvider === 'mock') {
-      console.log(
-        '\nNote: --reasoning uses a local, deterministic mock provider only. No LLM API, SDK, key, or network call is involved.\n',
-      );
-    }
-
-    const provider = buildReasoningProvider(reasoningProvider);
-    const reasoningById = new Map<string, SubmissionReasoning>();
-    for (const submission of submissions) {
-      const assessment = assessments.find((item) => item.submissionId === submission.id);
-      if (!assessment) continue;
-      reasoningById.set(submission.id, await applyReasoning(submission, requirements, assessment, provider, githubAdapter));
-    }
-
-    console.log(renderReasoningSummary(reasoningById));
-  }
+  await printReview(
+    task,
+    requirements,
+    submissions,
+    assessments,
+    { withReasoning, reasoningProvider, ...(inspect ? { inspect } : {}) },
+    buildReasoningProvider,
+    githubAdapter,
+  );
 
   if (inspectEvidence && githubAdapter) {
     await runEvidenceInspection(submissions, githubAdapter);
@@ -220,33 +268,26 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
     assessments.push(await evaluator.evaluate(task, submission));
   }
 
-  console.log(
-    renderReviewReport({ task, requirements, assessments }, { live: true, generalRequirementsNotice: buildRequirementsNotice(requirementExtractor) }),
+  const githubAdapter = options.inspectEvidence ? new GithubEvidenceAdapter() : undefined;
+
+  await printReview(
+    task,
+    requirements,
+    submissions,
+    assessments,
+    {
+      live: true,
+      generalRequirementsNotice: buildRequirementsNotice(requirementExtractor),
+      withReasoning: options.withReasoning,
+      reasoningProvider: options.reasoningProvider,
+      ...(options.inspect ? { inspect: options.inspect } : {}),
+    },
+    buildReasoningProvider,
+    githubAdapter,
   );
-  printInspectionIfRequested(task, requirements, assessments, options.inspect);
 
   if (submissions.length === 0) {
     console.log('\nNo submissions were returned for this task -- nothing further to evaluate.');
-  }
-
-  const githubAdapter = options.inspectEvidence ? new GithubEvidenceAdapter() : undefined;
-
-  if (options.withReasoning) {
-    if (options.reasoningProvider === 'mock') {
-      console.log(
-        '\nNote: --reasoning uses a local, deterministic mock provider only. No LLM API, SDK, key, or network call is involved.\n',
-      );
-    }
-
-    const provider = buildReasoningProvider(options.reasoningProvider);
-    const reasoningById = new Map<string, SubmissionReasoning>();
-    for (const submission of submissions) {
-      const assessment = assessments.find((item) => item.submissionId === submission.id);
-      if (!assessment) continue;
-      reasoningById.set(submission.id, await applyReasoning(submission, requirements, assessment, provider, githubAdapter));
-    }
-
-    console.log(renderReasoningSummary(reasoningById));
   }
 
   if (options.inspectEvidence && githubAdapter) {
@@ -304,7 +345,11 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((error: unknown) => {
-  console.error(error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+// Guarded so this file can be imported by tests (e.g. index.test.ts, for printReview/
+// runFixtureReview) without immediately parsing process.argv and running the CLI.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error: unknown) => {
+    console.error(error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

@@ -59,13 +59,16 @@ Options:
                       operation exists). Advisory display only -- never
                       affects score/classification. Works with --fixture or a
                       live <task-id>; not with --submission.
-  --inspect <ref>     Show the full evidence-backed breakdown (score,
-                      classification, confidence, every requirement's status
-                      and evidence, flags) for one submission, referenced
+  --inspect <ref>     Focused drill-down into one submission, referenced
                       either by its report "#N" display number or its literal
-                      submission ID. The compact summary is still shown
-                      first. Works with --fixture or a live <task-id>; not
-                      with --submission.
+                      submission ID -- skips the compact summary and prints
+                      only that submission's full evidence-backed breakdown
+                      (score, classification, confidence, every requirement's
+                      status and evidence, flags). Combined with --reasoning,
+                      the reasoning layer is asked about only this
+                      submission, not every submission in the bounty. Works
+                      with --fixture or a live <task-id>; not with
+                      --submission.
   -h, --help          Show this help
 `;
 

@@ -90,7 +90,7 @@ opt into `--reasoning`. This is the fastest way to try the tool or demo it.
 
 ```
 gibwork-agent review --fixture fixtures/task.json                # offline, deterministic only
-gibwork-agent review --fixture fixtures/task.json --inspect 3     # + full breakdown of submission #3
+gibwork-agent review --fixture fixtures/task.json --inspect 3     # focused drill-down into submission #3 (skips the summary)
 gibwork-agent review --fixture fixtures/challenging-task.json --reasoning                       # + mock reasoning
 gibwork-agent review --fixture fixtures/challenging-task.json --reasoning --reasoning-provider api  # + real reasoning
 ```
@@ -114,7 +114,7 @@ Then review one directly by id:
 
 ```
 gibwork-agent review <task-id>                                  # live, read-only Gibwork review
-gibwork-agent review <task-id> --inspect 3                       # + full breakdown of submission #3
+gibwork-agent review <task-id> --inspect 3                       # focused drill-down into submission #3 (skips the summary)
 gibwork-agent review <task-id> --reasoning                       # + mock reasoning
 ```
 
@@ -149,11 +149,13 @@ The report only ever recommends one of four things -- never "approve" or
 | Incomplete | Required evidence is missing |
 | Suspicious | Requires manual verification |
 
-For the full evidence-backed breakdown of one submission -- every
-requirement, its status, its evidence (type/source), the reason behind that
-status, and any quality/duplicate flags -- pass `--inspect <ref>`, where
-`<ref>` is either the submission's report `#N` display number or its literal
-submission ID:
+`--inspect <ref>` is a focused drill-down into one submission, not an
+addition to the summary -- it skips the compact report entirely and prints
+only that submission's full evidence-backed breakdown: every requirement,
+its status, its evidence (type/source), the reason behind that status, and
+any quality/duplicate flags. `<ref>` is either the submission's report `#N`
+display number or its literal submission ID. Run without `--inspect` first
+to see the summary and find which `#N` is worth a closer look:
 
 ```
 gibwork-agent review abc123 --inspect 12
@@ -161,8 +163,10 @@ gibwork-agent review abc123 --inspect <submission-id>
 gibwork-agent review --fixture fixtures/task.json --inspect 3
 ```
 
-The compact summary is always printed first; `--inspect` adds the detailed
-breakdown on top of it, it never replaces it.
+Combined with `--reasoning` (`--inspect 12 --reasoning`), the reasoning
+layer is asked about -- and only renders reasoning for -- the inspected
+submission, never every submission in the bounty; see
+[Cost and safety guidance](#cost-and-safety-guidance).
 
 ## What the reasoning layer does -- and does not do
 
@@ -290,6 +294,9 @@ removes the deterministic review.
   most submissions in the bundled fixtures are never routed at all.
 - Each routed submission gets exactly one batched API call, covering every
   trigger for that submission together -- never one call per trigger.
+- Combined with `--inspect`, this narrows further still: the provider is
+  called for (at most) the one inspected submission, never for every routed
+  submission in the bounty.
 - The client is constructed with a small, explicit retry cap (1) and a 30s
   timeout -- no unbounded automatic retries.
 - Never logged: the API key, request/response headers, or raw provider error
