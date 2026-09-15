@@ -80,6 +80,28 @@ Fixture mode needs none of this -- no wallet, no network, no Gibwork CLI.
   -- see [What the reasoning layer does -- and does not do](#what-the-reasoning-layer-does----and-does-not-do)
   for the full detail.
 
+## Scope and decision boundary
+
+`gibwork-agent` is a **read-only review and prioritization layer** -- not a
+decision-maker. It fetches and evaluates Gibwork bounty submissions, checks
+them against the task's requirements and available evidence, flags potential
+issues, and prioritizes which submissions most need a human's attention. It
+does **not** approve, reject, refund, or pay a submission.
+
+```
+Gibwork bounty → submissions → gibwork-agent → evidence + prioritization → human review → Gibwork approval/rejection
+```
+
+The final approval/rejection decision always stays with the bounty owner,
+made through Gibwork's own existing workflow -- this tool only informs that
+decision, it never makes or executes it. This separation is intentional:
+`gibwork-agent` is designed to provide evidence-backed decision support
+without ever taking a financial or irreversible action.
+
+A future version could optionally support explicit, user-confirmed approval
+actions through the Gibwork SDK, but write operations are out of scope for
+the current MVP.
+
 ## Usage
 
 ### Fixture / offline demo mode
@@ -117,6 +139,32 @@ gibwork-agent review <task-id>                                  # live, read-onl
 gibwork-agent review <task-id> --inspect 3                       # focused drill-down into submission #3 (skips the summary)
 gibwork-agent review <task-id> --reasoning                       # + mock reasoning
 ```
+
+### Interactive mode
+
+Running `gibwork-agent review <task-id>` (or `--fixture <path>`) with **both stdin and
+stdout attached to a real terminal** automatically follows the summary with a menu --
+no need to already know `--inspect` or `--reasoning`:
+
+```
+What would you like to do?
+
+  1. Inspect a submission
+  2. Exit
+```
+
+Picking "Inspect a submission" shows a numbered list built from the same submissions
+already in the report's `NEEDS ATTENTION` section (score descending) -- pick one by
+number to see its full existing focused-inspection report, then optionally choose
+"Run AI reasoning" to get the existing advisory reasoning output for **only** that one
+submission (never the whole bounty). `--reasoning`/`--reasoning-provider` still choose
+*which* provider that on-demand run uses; interactive mode never eagerly reasons about
+every routed submission the way non-interactive `--reasoning` does.
+
+This is a convenience layer, not a replacement -- `--inspect`/`--submission` still work
+exactly as documented above and never trigger a prompt (they already say precisely what
+you want). Piped/redirected/CI usage is never interactive either, with no flag required.
+Force it either way with `--interactive` / `--no-interactive`.
 
 ## Report format
 

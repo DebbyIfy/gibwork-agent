@@ -21,6 +21,10 @@ export interface LiveReviewCliOptions {
    *  report "#N" display number or its literal submission ID) instead of just the
    *  compact default report. */
   inspect?: string;
+  /** Explicit --interactive/--no-interactive override. undefined means "auto-detect from
+   *  the terminal" (see resolveInteractiveMode() in cli.ts) -- this field only carries
+   *  what the user explicitly asked for, never a resolved TTY-based decision. */
+  interactive?: boolean;
 }
 
 /** `gibwork-agent tasks --available` -- lists publicly available bounties via tasks.listAvailable(). */
@@ -44,6 +48,10 @@ export interface FixtureReviewCliOptions {
    *  report "#N" display number or its literal submission ID) instead of just the
    *  compact default report. */
   inspect?: string;
+  /** Explicit --interactive/--no-interactive override. undefined means "auto-detect from
+   *  the terminal" (see resolveInteractiveMode() in cli.ts) -- this field only carries
+   *  what the user explicitly asked for, never a resolved TTY-based decision. */
+  interactive?: boolean;
 }
 
 export type ReviewCliOptions = LiveReviewCliOptions | FixtureReviewCliOptions | ListAvailableTasksCliOptions;

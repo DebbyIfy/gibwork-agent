@@ -22,7 +22,9 @@ const ACTION_LINE: Record<SubmissionClassification, string> = {
   suspicious: 'Requires manual verification',
 };
 
-function classificationLabel(classification: SubmissionClassification): string {
+/** Exported for reuse by the interactive layer's submission-selection labels --
+ *  never redefined elsewhere. */
+export function classificationLabel(classification: SubmissionClassification): string {
   return classification.charAt(0).toUpperCase() + classification.slice(1);
 }
 

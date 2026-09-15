@@ -69,6 +69,18 @@ Options:
                       submission, not every submission in the bounty. Works
                       with --fixture or a live <task-id>; not with
                       --submission.
+  --interactive       Force interactive review mode: after the summary, offer
+                      a menu to inspect a submission (picked from a numbered
+                      list -- no need to know --inspect) and, from there,
+                      optionally run reasoning on just that submission (no
+                      need to know --reasoning). Interactive mode is already
+                      used automatically when both stdin and stdout are a
+                      real terminal (TTY); this flag forces it on even when
+                      piped/redirected. Ignored together with --inspect or
+                      --submission, which are already direct/non-interactive.
+  --no-interactive    Disable interactive mode even in a real terminal --
+                      prints the plain summary and exits, same as scripted/
+                      piped usage. Cannot be combined with --interactive.
   -h, --help          Show this help
 `;
 
@@ -87,6 +99,8 @@ export function parseCli(argv: string[]): ReviewCliOptions {
       'reasoning-provider': { type: 'string' },
       'inspect-evidence': { type: 'boolean' },
       inspect: { type: 'string' },
+      interactive: { type: 'boolean' },
+      'no-interactive': { type: 'boolean' },
       available: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
     },
@@ -122,6 +136,12 @@ export function parseCli(argv: string[]): ReviewCliOptions {
     throw new Error('--reasoning-provider requires --reasoning.');
   }
 
+  if (values.interactive && values['no-interactive']) {
+    throw new Error('--interactive and --no-interactive cannot both be passed.');
+  }
+  // undefined = no explicit preference -> caller auto-detects from the terminal.
+  const interactiveOverride: boolean | undefined = values['no-interactive'] ? false : values.interactive ? true : undefined;
+
   if (values.fixture) {
     if (positionals[1]) {
       throw new Error('--fixture cannot be combined with a live <task-id>. Use one or the other.');
@@ -134,6 +154,7 @@ export function parseCli(argv: string[]): ReviewCliOptions {
       inspectEvidence: values['inspect-evidence'] ?? false,
     };
     if (values.inspect) fixtureOptions.inspect = values.inspect;
+    if (interactiveOverride !== undefined) fixtureOptions.interactive = interactiveOverride;
     return fixtureOptions;
   }
 
@@ -147,9 +168,9 @@ export function parseCli(argv: string[]): ReviewCliOptions {
     throw new Error(`--status must be one of: ${STATUSES.join(', ')}`);
   }
 
-  if (values.submission && (values.reasoning || values['inspect-evidence'] || values.inspect)) {
+  if (values.submission && (values.reasoning || values['inspect-evidence'] || values.inspect || values.interactive)) {
     throw new Error(
-      '--submission (raw single-submission view) cannot be combined with --reasoning/--inspect-evidence/--inspect, which apply to the full task review pipeline.',
+      '--submission (raw single-submission view) cannot be combined with --reasoning/--inspect-evidence/--inspect/--interactive, which apply to the full task review pipeline.',
     );
   }
 
@@ -166,5 +187,23 @@ export function parseCli(argv: string[]): ReviewCliOptions {
   if (values.limit) options.limit = Number(values.limit);
   if (values.profile) options.profile = values.profile;
   if (values.inspect) options.inspect = values.inspect;
+  if (interactiveOverride !== undefined) options.interactive = interactiveOverride;
   return options;
+}
+
+/**
+ * Resolves whether this run should be interactive: an explicit --inspect always wins
+ * (it already expresses a specific, scripted request -- see the CLI help text), then an
+ * explicit --interactive/--no-interactive, then finally auto-detect from the terminal.
+ * Takes TTY state as plain booleans (not read internally) so this stays a pure,
+ * unit-testable function -- callers pass `process.stdin.isTTY`/`process.stdout.isTTY`.
+ */
+export function resolveInteractiveMode(
+  options: { interactive?: boolean; inspect?: string },
+  stdinIsTTY: boolean,
+  stdoutIsTTY: boolean,
+): boolean {
+  if (options.inspect) return false;
+  if (options.interactive !== undefined) return options.interactive;
+  return stdinIsTTY && stdoutIsTTY;
 }

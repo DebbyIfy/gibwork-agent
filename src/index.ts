@@ -2,7 +2,8 @@
 import { realpathSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 import type { AvailableTasksQuery, GibworkClient, SubmissionPaginationQuery, SubmissionStatus, TaskDetails } from '@gibwork/sdk';
-import { parseCli } from './cli.js';
+import { parseCli, resolveInteractiveMode } from './cli.js';
+import { runInteractiveReview, createReadlineAsk } from './interactive.js';
 import { buildGibworkClient, listSubmissions, getSubmissionDetail, listAvailableTasks, getTask } from './gibwork.js';
 import { renderSubmissionDetail, renderAvailableTasksList } from './present.js';
 import { loadFixture } from './fixture-loader.js';
@@ -179,6 +180,7 @@ export async function runFixtureReview(
   reasoningProvider: ReasoningProvider,
   inspectEvidence: boolean,
   inspect: string | undefined,
+  interactive: boolean,
 ): Promise<void> {
   console.log('=== FIXTURE MODE -- local evaluation only: no Gibwork wallet, no Gibwork network, no LLM ===\n');
 
@@ -198,10 +200,21 @@ export async function runFixtureReview(
     requirements,
     submissions,
     assessments,
-    { withReasoning, reasoningProvider, ...(inspect ? { inspect } : {}) },
+    // Interactive mode never eagerly reasons about every routed submission -- reasoning
+    // there is on-demand, per submission, only if the user explicitly asks (see below).
+    { withReasoning: interactive ? false : withReasoning, reasoningProvider, ...(inspect ? { inspect } : {}) },
     buildReasoningProvider,
     githubAdapter,
   );
+
+  if (interactive) {
+    const { ask, close } = createReadlineAsk();
+    try {
+      await runInteractiveReview(task, requirements, submissions, assessments, reasoningProvider, { ask, buildProvider: buildReasoningProvider }, githubAdapter);
+    } finally {
+      close();
+    }
+  }
 
   if (inspectEvidence && githubAdapter) {
     await runEvidenceInspection(submissions, githubAdapter);
@@ -216,6 +229,7 @@ interface RunLiveReviewOptions {
   reasoningProvider: ReasoningProvider;
   inspectEvidence: boolean;
   inspect?: string;
+  interactive: boolean;
 }
 
 /**
@@ -280,7 +294,9 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
     {
       live: true,
       generalRequirementsNotice: buildRequirementsNotice(requirementExtractor),
-      withReasoning: options.withReasoning,
+      // Interactive mode never eagerly reasons about every routed submission -- reasoning
+      // there is on-demand, per submission, only if the user explicitly asks (see below).
+      withReasoning: options.interactive ? false : options.withReasoning,
       reasoningProvider: options.reasoningProvider,
       ...(options.inspect ? { inspect: options.inspect } : {}),
     },
@@ -292,6 +308,23 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
     console.log('\nNo submissions were returned for this task -- nothing further to evaluate.');
   }
 
+  if (options.interactive) {
+    const { ask, close } = createReadlineAsk();
+    try {
+      await runInteractiveReview(
+        task,
+        requirements,
+        submissions,
+        assessments,
+        options.reasoningProvider,
+        { ask, buildProvider: buildReasoningProvider },
+        githubAdapter,
+      );
+    } finally {
+      close();
+    }
+  }
+
   if (options.inspectEvidence && githubAdapter) {
     await runEvidenceInspection(submissions, githubAdapter);
   }
@@ -301,7 +334,8 @@ async function main(): Promise<void> {
   const cli = parseCli(process.argv.slice(2));
 
   if (cli.mode === 'fixture') {
-    await runFixtureReview(cli.fixturePath, cli.reasoning, cli.reasoningProvider, cli.inspectEvidence, cli.inspect);
+    const interactive = resolveInteractiveMode(cli, Boolean(process.stdin.isTTY), Boolean(process.stdout.isTTY));
+    await runFixtureReview(cli.fixturePath, cli.reasoning, cli.reasoningProvider, cli.inspectEvidence, cli.inspect, interactive);
     return;
   }
 
@@ -344,6 +378,7 @@ async function main(): Promise<void> {
     reasoningProvider: cli.reasoningProvider,
     inspectEvidence: cli.inspectEvidence,
     ...(cli.inspect ? { inspect: cli.inspect } : {}),
+    interactive: resolveInteractiveMode(cli, Boolean(process.stdin.isTTY), Boolean(process.stdout.isTTY)),
   });
 }
 
