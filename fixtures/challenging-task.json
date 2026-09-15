@@ -1,0 +1,39 @@
+{
+  "id": "fixture-task-002",
+  "title": "Add pagination to the /tasks endpoint",
+  "description": "Add page/limit-based pagination to the public /tasks API endpoint. Submit a GitHub pull request or commit link, include automated tests, update the API documentation, keep the change backward compatible for existing callers, and note any performance considerations.",
+  "requirements": [
+    {
+      "id": "pagination-implemented",
+      "description": "Pagination (page and limit query parameters) is implemented on the /tasks endpoint, with a GitHub PR or commit link for the change.",
+      "required": true,
+      "keywords": ["pagination", "page and limit", "page/limit"],
+      "evidenceType": "github"
+    },
+    {
+      "id": "tests-added",
+      "description": "Automated tests covering the new pagination behavior are included, with a link to the test file(s) or the PR containing them.",
+      "required": true,
+      "keywords": ["test", "tests", "unit test"],
+      "evidenceType": "github"
+    },
+    {
+      "id": "docs-updated",
+      "description": "API documentation (README or docs site) is updated to describe the new pagination parameters.",
+      "required": true,
+      "keywords": ["doc", "readme", "documentation"]
+    },
+    {
+      "id": "backward-compatible",
+      "description": "Existing callers that omit pagination parameters continue to work unchanged (backward compatible).",
+      "required": true,
+      "keywords": ["backward compat", "backwards compat"]
+    },
+    {
+      "id": "performance-considered",
+      "description": "Performance impact of pagination (e.g. database indexing) is considered and discussed.",
+      "required": false,
+      "keywords": ["performance", "index", "query plan"]
+    }
+  ]
+}

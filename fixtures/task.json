@@ -1,0 +1,33 @@
+{
+  "id": "fixture-task-001",
+  "title": "Add a working contact form to the marketing site",
+  "description": "Implement a contact form on the marketing site that validates input, sends submissions to the team, and is deployed to the live site. Submit a GitHub pull request or commit link with the change and a short write-up of your approach.",
+  "requirements": [
+    {
+      "id": "contact-form-live",
+      "description": "A contact form is implemented and reachable at a live URL.",
+      "required": true,
+      "keywords": ["contact form"],
+      "evidenceType": "url"
+    },
+    {
+      "id": "form-validation",
+      "description": "Form submissions are validated (required fields, email format) before sending.",
+      "required": true,
+      "keywords": ["valid"]
+    },
+    {
+      "id": "code-change-link",
+      "description": "A GitHub pull request or commit link is provided for the code change.",
+      "required": true,
+      "keywords": ["pull request", "commit", "github"],
+      "evidenceType": "github"
+    },
+    {
+      "id": "approach-writeup",
+      "description": "A brief write-up of the approach taken is included.",
+      "required": false,
+      "keywords": ["approach", "write-up", "summary"]
+    }
+  ]
+}

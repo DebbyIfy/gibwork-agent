@@ -1,0 +1,47 @@
+[
+  {
+    "id": "sub-c01",
+    "content": "Implemented pagination on the /tasks endpoint using page and limit query parameters: https://github.com/example-org/tasks-api/pull/101. Added unit tests covering default, boundary, and out-of-range pagination cases in the same PR. Updated the README with the new query parameters and example requests. This is fully backward compatible -- omitting page/limit still returns the original full list. Also added a database index on the sort column to keep performance reasonable at scale."
+  },
+  {
+    "id": "sub-c02",
+    "content": "Added pagination to /tasks, wrote thorough unit tests for all the edge cases, updated the documentation, made sure everything is fully backward compatible with existing callers, and considered performance implications with proper database indexing."
+  },
+  {
+    "id": "sub-c03",
+    "content": "Implemented pagination on /tasks: https://github.com/example-org/tasks-api/pull/104. I tested this manually and attached a screenshot of the test run results. Docs updated in the README. Backward compatible with existing calls.",
+    "attachments": [{ "type": "image", "value": "test-run-results.png" }]
+  },
+  {
+    "id": "sub-c04",
+    "content": "Everything is in this PR: https://github.com/example-org/tasks-api/pull/108. Pagination is implemented and fully tested. Docs are updated too, and this is backward compatible."
+  },
+  {
+    "id": "sub-c05",
+    "content": "Pagination has been fully implemented and thoroughly tested across all edge cases, including boundary conditions and large datasets. Documentation has been comprehensively updated to reflect the new parameters and this remains fully backward compatible. For background on why this matters, see https://example.dev/blog/why-pagination-matters-2024."
+  },
+  {
+    "id": "sub-c06",
+    "content": "Implemented pagination on /tasks: https://github.com/example-org/tasks-api/pull/112. Tests are included in the same PR. I did not update the documentation yet -- will follow up in a separate PR. Backward compatible: existing calls without page/limit still return the full list as before."
+  },
+  {
+    "id": "sub-c07",
+    "content": "Implemented pagination for /tasks -- htps:/github.com/example-org/tasks-api/pull/91 (sorry, bad paste, let me know if that link doesn't work). You can also just check https://github.com for the org page in the meantime. Tests and docs are done too."
+  },
+  {
+    "id": "sub-c08",
+    "content": "I only had time to implement pagination on /tasks before the deadline -- didn't get to tests or docs. PR here: https://github.com/example-org/tasks-api/pull/64."
+  },
+  {
+    "id": "sub-c09",
+    "content": "Implemented pagination on /tasks. PR here: https://github.com/example-org/tasks-api/pull/50. Tests included in the PR. Docs updated in the README. Backward compatible -- default behavior unchanged."
+  },
+  {
+    "id": "sub-c10",
+    "content": "Finished the pagination work, added tests, and updated the documentation. Backward compatible by default. See the code here: https://github.com/example-org/tasks-api/pull/50."
+  },
+  {
+    "id": "sub-c11",
+    "content": "Added pagination support to /tasks: https://github.com/example-org/tasks-api/pull/70. Tests are included. Documentation has been updated in the README. This change is fully backward compatible with existing integrations. Note: as of this PR, callers must always include a page parameter, since the endpoint no longer returns the full list by default."
+  }
+]

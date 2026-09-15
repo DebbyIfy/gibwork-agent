@@ -1,0 +1,30 @@
+[
+  {
+    "id": "sub-001",
+    "content": "Implemented the contact form and deployed it live at https://staging.example-tasks.dev/contact. All fields are validated client-side and server-side (required fields plus valid email format) before the message is sent. Code change: https://github.com/example-org/site-contact-form/pull/42. Approach: added a ContactForm component, a small serverless endpoint that validates input and forwards it to the team mailer, plus unit tests for the validation logic."
+  },
+  {
+    "id": "sub-002",
+    "content": "Added the contact form, live at https://staging.example-tasks.dev/contact-v2. I pushed the code and will open the actual PR shortly -- commit / patch notes here: https://paste.example.dev/patch-notes-8841. The form validates email format and required fields before submitting."
+  },
+  {
+    "id": "sub-003",
+    "content": "I completed the contact form and deployed it. All fields are validated before submission. The code change is committed and ready for review. I also included a short write-up describing my approach."
+  },
+  {
+    "id": "sub-004",
+    "content": "Implemented the contact form and deployed it at https://staging.example-tasks.dev/contact-v3. I did not add form validation since the task didn't specify exact field-level rules. Code is in this PR: https://github.com/example-org/site-contact-form/pull/57."
+  },
+  {
+    "id": "sub-005",
+    "content": ""
+  },
+  {
+    "id": "sub-006",
+    "content": "Contact form implemented and deployed at https://staging.example-tasks.dev/contact-dup. Fields validated before submit. Code change: https://github.com/example-org/site-contact-form/pull/99."
+  },
+  {
+    "id": "sub-007",
+    "content": "Contact form implemented and deployed at https://staging.example-tasks.dev/contact-dup. Fields validated before submit. Code change: https://github.com/example-org/site-contact-form/pull/99."
+  }
+]
