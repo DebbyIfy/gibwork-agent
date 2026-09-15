@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 import type { AvailableTasksQuery, GibworkClient, SubmissionPaginationQuery, SubmissionStatus, TaskDetails } from '@gibwork/sdk';
 import { parseCli } from './cli.js';
 import { buildGibworkClient, listSubmissions, getSubmissionDetail, listAvailableTasks, getTask } from './gibwork.js';
@@ -347,7 +349,11 @@ async function main(): Promise<void> {
 
 // Guarded so this file can be imported by tests (e.g. index.test.ts, for printReview/
 // runFixtureReview) without immediately parsing process.argv and running the CLI.
-if (import.meta.url === `file://${process.argv[1]}`) {
+// process.argv[1] is compared via its realpath, not raw, because it is the invoked path
+// (e.g. an npm-link bin symlink) while import.meta.url is already the resolved real
+// module path -- comparing the two raw would never match through a symlink.
+const isMainModule = process.argv[1] !== undefined && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+if (isMainModule) {
   main().catch((error: unknown) => {
     console.error(error instanceof Error ? error.message : error);
     process.exitCode = 1;
