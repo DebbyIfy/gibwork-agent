@@ -26,35 +26,56 @@ class ExitRequested extends Error {}
 const MAX_PROMPT_ATTEMPTS = 3;
 
 /**
- * Prints a numbered menu and reads a choice. Empty input, EOF (ask() resolving to ''
- * -- see createReadlineAsk()), and exhausting MAX_PROMPT_ATTEMPTS invalid attempts all
- * resolve to `null`, which every caller treats as "go back" -- never a crash, never a
- * hang, never an unhandled rejection.
+ * Shared retry/EOF loop used by every numbered menu in this module. Empty input, EOF
+ * (ask() resolving to '' -- see createReadlineAsk()), and exhausting
+ * MAX_PROMPT_ATTEMPTS invalid attempts all resolve to `null`, which every caller treats
+ * as "go back" -- never a crash, never a hang, never an unhandled rejection.
  */
-async function promptChoice(ask: AskFn, question: string, options: string[]): Promise<number | null> {
-  console.log(`\n${question}\n`);
-  options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
-
+async function readChoice(ask: AskFn, max: number): Promise<number | null> {
   for (let attempt = 0; attempt < MAX_PROMPT_ATTEMPTS; attempt += 1) {
     const raw = (await ask('\n> ')).trim();
     if (raw === '') return null;
     const choice = Number(raw);
-    if (Number.isInteger(choice) && choice >= 1 && choice <= options.length) return choice;
-    console.log(`Please enter a number between 1 and ${options.length}.`);
+    if (Number.isInteger(choice) && choice >= 1 && choice <= max) return choice;
+    console.log(`Please enter a number between 1 and ${max}.`);
   }
 
   console.log('\nToo many invalid attempts -- going back.');
   return null;
 }
 
+async function promptChoice(ask: AskFn, question: string, options: string[]): Promise<number | null> {
+  console.log(`\n${question}\n`);
+  options.forEach((option, index) => console.log(`  ${index + 1}. ${option}`));
+  return readChoice(ask, options.length);
+}
+
 function describeSubmission(entry: SubmissionSummaryEntry): string {
   return `#${entry.displayNumber} — ${classificationLabel(entry.assessment.classification)} — ${entry.assessment.score.total}/100`;
 }
 
-async function selectSubmission(ask: AskFn, candidates: SubmissionSummaryEntry[]): Promise<SubmissionSummaryEntry | undefined> {
-  const choice = await promptChoice(ask, 'Which submission would you like to inspect?', candidates.map(describeSubmission));
+/**
+ * Lists Priority Review submissions first, in their existing (unchanged) order, then --
+ * only if any exist -- every remaining submission (Strong included) under an "OTHER
+ * SUBMISSIONS" heading, numbering continuing on from Priority Review. Either list may
+ * be selected; nothing here recomputes classification, score, or ordering.
+ */
+async function selectSubmission(
+  ask: AskFn,
+  priorityReview: SubmissionSummaryEntry[],
+  otherSubmissions: SubmissionSummaryEntry[],
+): Promise<SubmissionSummaryEntry | undefined> {
+  console.log('\nWhich submission would you like to inspect?\n');
+  priorityReview.forEach((entry, index) => console.log(`  ${index + 1}. ${describeSubmission(entry)}`));
+  if (otherSubmissions.length > 0) {
+    console.log('\nOTHER SUBMISSIONS');
+    otherSubmissions.forEach((entry, index) => console.log(`  ${priorityReview.length + index + 1}. ${describeSubmission(entry)}`));
+  }
+
+  const all = [...priorityReview, ...otherSubmissions];
+  const choice = await readChoice(ask, all.length);
   if (choice === null) return undefined;
-  return candidates[choice - 1];
+  return all[choice - 1];
 }
 
 /**
@@ -107,7 +128,8 @@ async function runPostInspectionMenu(
 }
 
 async function runSubmissionSelection(
-  candidates: SubmissionSummaryEntry[],
+  priorityReview: SubmissionSummaryEntry[],
+  otherSubmissions: SubmissionSummaryEntry[],
   task: ReviewTask,
   requirements: Requirement[],
   submissions: ReviewSubmission[],
@@ -116,7 +138,7 @@ async function runSubmissionSelection(
   githubAdapter?: GithubEvidenceAdapter,
 ): Promise<void> {
   while (true) {
-    const entry = await selectSubmission(deps.ask, candidates);
+    const entry = await selectSubmission(deps.ask, priorityReview, otherSubmissions);
     if (!entry) return; // back to the main menu
 
     console.log('');
@@ -130,11 +152,14 @@ async function runSubmissionSelection(
  * Additional convenience layer over the existing review pipeline -- orchestration only.
  * No evaluation, scoring, classification, or reasoning logic lives here: submission
  * selection reuses buildReviewSummary()'s already-computed, already-sorted
- * `needsAttention` list, inspection reuses renderSubmissionInspection() unmodified, and
- * reasoning reuses applyReasoning()/renderReasoningSummary() unmodified. `assessments`
- * are only ever read, never recomputed or mutated -- reasoning triggered from this menu
- * is exactly as advisory as --reasoning already is, and this module has no Gibwork
- * write capability to call in the first place.
+ * `needsAttention` list for Priority Review (order unchanged), and every remaining
+ * submission (Strong included) from `entries` for the OTHER SUBMISSIONS section, so any
+ * submission -- not just ones needing attention -- can be inspected. Inspection reuses
+ * renderSubmissionInspection() unmodified, and reasoning reuses
+ * applyReasoning()/renderReasoningSummary() unmodified. `assessments` are only ever read,
+ * never recomputed or mutated -- reasoning triggered from this menu is exactly as
+ * advisory as --reasoning already is, and this module has no Gibwork write capability to
+ * call in the first place.
  */
 export async function runInteractiveReview(
   task: ReviewTask,
@@ -149,19 +174,23 @@ export async function runInteractiveReview(
   // Review/Incomplete/Suspicious, score descending, never truncated -- the same "what
   // needs a human's attention" worklist already shown in the report's NEEDS ATTENTION
   // section, not a new selection or ranking.
-  const candidates = summary.needsAttention;
+  const priorityReview = summary.needsAttention;
+  const priorityReviewIds = new Set(priorityReview.map((entry) => entry.submissionId));
+  // Everything not already in Priority Review (i.e. Strong submissions), in original
+  // submission order -- so a submission never appears in both sections.
+  const otherSubmissions = summary.entries.filter((entry) => !priorityReviewIds.has(entry.submissionId));
 
   try {
     while (true) {
       const choice = await promptChoice(deps.ask, 'What would you like to do?', ['Inspect a submission', 'Exit']);
       if (choice === null || choice === 2) return;
 
-      if (candidates.length === 0) {
+      if (priorityReview.length === 0 && otherSubmissions.length === 0) {
         console.log('\nNo submissions currently need attention -- nothing to inspect.');
         continue;
       }
 
-      await runSubmissionSelection(candidates, task, requirements, submissions, reasoningProvider, deps, githubAdapter);
+      await runSubmissionSelection(priorityReview, otherSubmissions, task, requirements, submissions, reasoningProvider, deps, githubAdapter);
     }
   } catch (error) {
     if (!(error instanceof ExitRequested)) throw error;

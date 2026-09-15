@@ -180,6 +180,75 @@ test('interactive: reasoning is advisory only -- running it never changes the de
   assert.deepEqual(assessments, before);
 });
 
+test('interactive: a Priority Review submission can still be selected', async () => {
+  const { output, entries } = await run(['1', '1']); // menu->inspect, pick 1st Priority Review entry
+  assert.ok(output.includes(`SUBMISSION #${entries[0]!.displayNumber} -- INSPECTION`));
+});
+
+test('interactive: a Strong submission excluded from Priority Review appears under OTHER SUBMISSIONS', async () => {
+  const { task, submissions, requirements, assessments } = await buildChallengingReviewInputs();
+  const summary = buildReviewSummary({ task, requirements, assessments });
+  const strongEntries = summary.entries.filter((entry) => entry.assessment.classification === 'strong');
+  assert.ok(strongEntries.length > 0, 'fixture must contain at least one Strong submission for this test to be meaningful');
+
+  const { output } = await run(['1']); // menu->inspect, then answers run out -> EOF -> unwinds cleanly
+  assert.ok(output.includes('OTHER SUBMISSIONS'));
+  for (const entry of strongEntries) {
+    assert.ok(
+      output.includes(`#${entry.displayNumber} — Strong — ${entry.assessment.score.total}/100`),
+      `expected OTHER SUBMISSIONS to list Strong submission #${entry.displayNumber}`,
+    );
+  }
+});
+
+test('interactive: selecting a Strong submission under OTHER SUBMISSIONS opens its normal inspection', async () => {
+  const { task, submissions, requirements, assessments } = await buildChallengingReviewInputs();
+  const summary = buildReviewSummary({ task, requirements, assessments });
+  const priorityCount = summary.needsAttention.length;
+  const strongEntry = summary.entries.find((entry) => entry.assessment.classification === 'strong')!;
+  const expected = renderSubmissionInspection(strongEntry, task, requirements);
+
+  const output = await captureConsole(() =>
+    runInteractiveReview(task, requirements, submissions, assessments, 'mock', {
+      ask: scriptedAsk(['1', String(priorityCount + 1)]), // menu->inspect, pick the first OTHER SUBMISSIONS entry
+      buildProvider: providerShouldNotBeBuilt(),
+    }),
+  );
+
+  assert.ok(output.includes(expected), 'interactive output must contain the unmodified renderSubmissionInspection() output');
+  assert.ok(output.includes(`SUBMISSION #${strongEntry.displayNumber} -- INSPECTION`));
+});
+
+test('interactive: no submission appears in both Priority Review and OTHER SUBMISSIONS', async () => {
+  const { task, requirements, assessments } = await buildChallengingReviewInputs();
+  const summary = buildReviewSummary({ task, requirements, assessments });
+
+  const { output } = await run(['1']); // menu->inspect, then answers run out -> EOF -> unwinds cleanly
+
+  // Every printed "N. #M — ..." menu line references a distinct submission display number.
+  const referencedDisplayNumbers = [...output.matchAll(/^\s*\d+\. #(\d+) —/gm)].map((match) => Number(match[1]));
+  assert.equal(referencedDisplayNumbers.length, summary.entries.length, 'every submission should appear exactly once across both sections');
+  assert.equal(new Set(referencedDisplayNumbers).size, referencedDisplayNumbers.length, 'no display number should be listed twice');
+});
+
+test('interactive: existing Back/Exit navigation still works alongside the new OTHER SUBMISSIONS section', async () => {
+  const { task, submissions, requirements, assessments } = await buildChallengingReviewInputs();
+  const summary = buildReviewSummary({ task, requirements, assessments });
+  const priorityCount = summary.needsAttention.length;
+  const strongEntry = summary.entries.find((entry) => entry.assessment.classification === 'strong')!;
+
+  const output = await captureConsole(() =>
+    runInteractiveReview(task, requirements, submissions, assessments, 'mock', {
+      // menu->inspect, pick the Strong entry, Back to submissions, Exit from submission list, Exit main menu
+      ask: scriptedAsk(['1', String(priorityCount + 1), '2', '2', '2']),
+      buildProvider: providerShouldNotBeBuilt(),
+    }),
+  );
+
+  assert.ok(output.includes(`SUBMISSION #${strongEntry.displayNumber} -- INSPECTION`));
+  assert.ok(output.includes('Which submission would you like to inspect?'));
+});
+
 test('interactive: uses the existing report/reasoning renderers rather than a reimplementation', async () => {
   // Covered structurally: this module imports renderSubmissionInspection, renderReasoningSummary,
   // applyReasoning, and buildReviewSummary from the existing evaluation/report modules and
