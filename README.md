@@ -33,7 +33,7 @@ Human review
 developed and tested on Node 22) and npm.
 
 ```
-git clone <repo-url>
+git clone https://github.com/DebbyIfy/gibwork-agent.git
 cd gibwork-agent
 npm install
 npm run build
@@ -176,8 +176,8 @@ bounty with many submissions:
    requirements are typically satisfied/partial/missing across the
    submissions received), submission count, and counts per classification
    (`Strong` / `Review` / `Incomplete` / `Suspicious`).
-2. A **Priority Review** section highlighting the `Review`/`Suspicious`
-   submissions most worth a human's time first (score descending).
+2. A **Priority Review** section highlighting the `Review`, `Incomplete`, and
+   `Suspicious` submissions most worth a human's time first (score descending).
 3. Compact ~3-4 line blocks per submission in `TOP SUBMISSIONS` (a sample of
    `Strong` submissions) and `NEEDS ATTENTION` (every `Review`/`Incomplete`/
    `Suspicious` submission) -- never a full requirement/evidence dump.
