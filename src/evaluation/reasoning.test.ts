@@ -12,7 +12,7 @@ import type { Requirement, ReviewSubmission, SubmissionAssessment } from './type
 /**
  * All tests here are fully offline: the LLM provider and the GitHub CLI boundary are
  * both plain injected fakes. Nothing spawns a real `gh` process, makes a network call,
- * or requires an Anthropic API key.
+ * or requires an OpenRouter API key.
  */
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));

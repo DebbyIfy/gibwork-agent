@@ -27,20 +27,33 @@ function assessment(
 test('summarizeRequirementStatus: no submissions -> everything zero, not claimed as missing', () => {
   const requirements: Requirement[] = [{ id: 'r1', description: 'd', required: true }];
   const summary = summarizeRequirementStatus(requirements, []);
-  assert.deepEqual(summary, { total: 1, satisfied: 0, partial: 0, missing: 0 });
+  assert.deepEqual(summary, { total: 1, satisfied: 0, partial: 0, needsSemanticReview: 0, missing: 0 });
 });
 
-test('summarizeRequirementStatus: takes the most common bucket across submissions, not "ever satisfied"', () => {
+test('summarizeRequirementStatus: a free-form claim (no evidenceType, no keywords) is its own bucket, never "satisfied"', () => {
   const requirements: Requirement[] = [{ id: 'r1', description: 'no-evidence-type req', required: true }];
   const assessments = [
-    assessment('s1', 'strong', 90, [requirementAssessment('r1', 'claimed')]),
+    assessment('s1', 'review', 70, [requirementAssessment('r1', 'claimed')]),
     assessment('s2', 'review', 60, [requirementAssessment('r1', 'claimed')]),
     assessment('s3', 'incomplete', 10, [requirementAssessment('r1', 'not_found')]),
   ];
   const summary = summarizeRequirementStatus(requirements, assessments);
-  // claimed with no evidenceType is the classifier's own "fully satisfied" ceiling -> 2 satisfied vs 1 missing.
-  assert.equal(summary.satisfied, 1);
+  // claimed with no evidenceType and no keywords is a free-form claim -- deterministically
+  // unverifiable, so this one requirement's mode bucket is needsSemanticReview (2 claimed
+  // vs 1 not_found), never "satisfied".
+  assert.equal(summary.needsSemanticReview, 1);
+  assert.equal(summary.satisfied, 0);
   assert.equal(summary.missing, 0);
+});
+
+test('summarizeRequirementStatus: a keyword-matched claim (no evidenceType, but has keywords) is still "satisfied"', () => {
+  const requirements: Requirement[] = [{ id: 'r1', description: 'keyword req', required: true, keywords: ['docs'] }];
+  const assessments = [assessment('s1', 'review', 70, [requirementAssessment('r1', 'claimed')])];
+  const summary = summarizeRequirementStatus(requirements, assessments);
+  // A keyword match found something concrete -- unlike a bare free-form claim, this
+  // legitimately reaches the deterministic "satisfied" ceiling, unchanged by this fix.
+  assert.equal(summary.satisfied, 1);
+  assert.equal(summary.needsSemanticReview, 0);
 });
 
 test('summarizeRequirementStatus: a claim against a requirement WITH an evidence type is only "partial"', () => {

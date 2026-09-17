@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { extractRequirements } from './evaluation/requirements.js';
 import { LocalDeterministicEvaluator } from './evaluation/evaluator.js';
 import { renderReviewReport } from './evaluation/report.js';
 import { loadFixture } from './fixture-loader.js';
-import { printReview } from './index.js';
+import { printReview, prepareInteractiveReasoningProvider, resolveInteractiveReasoningProvider, loadProjectEnvFile } from './index.js';
 import type { LLMProvider, ReasoningRequest, ReasoningResult } from './evaluation/llm.js';
 import type { ReviewSubmission, ReviewTask, Requirement, SubmissionAssessment } from './evaluation/types.js';
 import type { ReasoningProvider } from './types.js';
@@ -204,4 +208,122 @@ test('printReview: reasoning is advisory only -- enabling it never changes the d
   );
 
   assert.deepEqual(assessments, before);
+});
+
+/**
+ * resolveInteractiveReasoningProvider() is the sole decision point for what live
+ * interactive mode's on-demand "Run AI reasoning" action uses -- pure and cheap to test
+ * exhaustively across all four (explicit, key-configured) combinations.
+ */
+test('resolveInteractiveReasoningProvider: an explicit choice always wins, regardless of key configuration', () => {
+  assert.equal(resolveInteractiveReasoningProvider('api', false), 'api');
+  assert.equal(resolveInteractiveReasoningProvider('api', true), 'api');
+  assert.equal(resolveInteractiveReasoningProvider('mock', false), 'mock');
+  assert.equal(resolveInteractiveReasoningProvider('mock', true), 'mock');
+});
+
+test('resolveInteractiveReasoningProvider: no explicit preference resolves to "api" when OPENROUTER_API_KEY is configured', () => {
+  assert.equal(resolveInteractiveReasoningProvider(undefined, true), 'api');
+});
+
+test('resolveInteractiveReasoningProvider: no explicit preference falls back to "mock" when no key is configured', () => {
+  assert.equal(resolveInteractiveReasoningProvider(undefined, false), 'mock');
+});
+
+/**
+ * prepareInteractiveReasoningProvider() is what runLiveReview() actually calls before
+ * entering the interactive readline loop -- it wraps resolveInteractiveReasoningProvider()
+ * with the one-time explanatory message. Tested here with an injected `log` fake so
+ * nothing touches real stdin/stdout or the interactive menu machinery (see
+ * interactive.test.ts for that, driven via its own injected `ask`).
+ */
+function captureLog(): { log: (message: string) => void; messages: string[] } {
+  const messages: string[] = [];
+  return { log: (message: string) => messages.push(message), messages };
+}
+
+test('prepareInteractiveReasoningProvider: no explicit provider + key configured -> resolves "api" and announces it', () => {
+  const { log, messages } = captureLog();
+  const provider = prepareInteractiveReasoningProvider(undefined, true, log);
+
+  assert.equal(provider, 'api');
+  assert.equal(messages.length, 1);
+  assert.match(messages[0]!, /OPENROUTER_API_KEY is configured/);
+  assert.match(messages[0]!, /real OpenRouter provider/);
+});
+
+test('prepareInteractiveReasoningProvider: no explicit provider + no key -> resolves "mock" and clearly explains why (not a silent pretend-real)', () => {
+  const { log, messages } = captureLog();
+  const provider = prepareInteractiveReasoningProvider(undefined, false, log);
+
+  assert.equal(provider, 'mock');
+  assert.equal(messages.length, 1);
+  assert.match(messages[0]!, /Real reasoning is not configured/);
+  assert.match(messages[0]!, /OPENROUTER_API_KEY/);
+  assert.match(messages[0]!, /local mock provider/);
+});
+
+test('prepareInteractiveReasoningProvider: an explicit provider is honored silently -- no announcement either way', () => {
+  const withKey = captureLog();
+  assert.equal(prepareInteractiveReasoningProvider('mock', true, withKey.log), 'mock');
+  assert.equal(withKey.messages.length, 0, 'an explicit choice needs no explanation');
+
+  const withoutKey = captureLog();
+  assert.equal(prepareInteractiveReasoningProvider('api', false, withoutKey.log), 'api');
+  assert.equal(withoutKey.messages.length, 0, 'an explicit choice needs no explanation, even one the key can\'t actually back');
+});
+
+test('prepareInteractiveReasoningProvider: never exposes an API key -- the announcement message names only the env var', () => {
+  const { log, messages } = captureLog();
+  prepareInteractiveReasoningProvider(undefined, true, log);
+  assert.doesNotMatch(messages[0]!, /sk-|Bearer /i);
+});
+
+/**
+ * loadProjectEnvFile() is what makes `gibwork-agent review <task>` (the linked bin, run
+ * from an arbitrary directory) pick up OPENROUTER_API_KEY/OPENROUTER_MODEL without the
+ * user having to remember `node --env-file=.env ...`. Tested against temporary fixture
+ * files (never this repo's real .env) so nothing here depends on -- or leaks -- any real
+ * credential.
+ */
+function withTempEnvFile(contents: string, run: (envFileUrl: URL) => void): void {
+  const dir = mkdtempSync(join(tmpdir(), 'gibwork-agent-env-test-'));
+  const envPath = join(dir, '.env');
+  writeFileSync(envPath, contents, 'utf8');
+  try {
+    run(pathToFileURL(envPath));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('loadProjectEnvFile: loads a variable from the given .env file into process.env', () => {
+  const varName = 'GIBWORK_AGENT_TEST_ENV_VAR';
+  delete process.env[varName];
+  try {
+    withTempEnvFile(`${varName}=hello-from-env-file\n`, (envFileUrl) => {
+      loadProjectEnvFile(envFileUrl);
+      assert.equal(process.env[varName], 'hello-from-env-file');
+    });
+  } finally {
+    delete process.env[varName];
+  }
+});
+
+test('loadProjectEnvFile: a missing .env file is silently ignored, never a crash', () => {
+  const missingPath = pathToFileURL(join(tmpdir(), 'gibwork-agent-env-test-does-not-exist-' + Date.now(), '.env'));
+  assert.doesNotThrow(() => loadProjectEnvFile(missingPath));
+});
+
+test('loadProjectEnvFile: never overwrites a variable already set in the environment (shell env wins over .env, like --env-file)', () => {
+  const varName = 'GIBWORK_AGENT_TEST_ENV_VAR';
+  process.env[varName] = 'from-shell';
+  try {
+    withTempEnvFile(`${varName}=from-file\n`, (envFileUrl) => {
+      loadProjectEnvFile(envFileUrl);
+      assert.equal(process.env[varName], 'from-shell');
+    });
+  } finally {
+    delete process.env[varName];
+  }
 });

@@ -1,6 +1,6 @@
 import type { Requirement, RequirementAssessment, ReviewResult, ReviewTask, SubmissionClassification, SubmissionFlag } from './types.js';
 import type { SubmissionReasoning } from './reasoning.js';
-import { isRequirementFullySatisfied } from './classification.js';
+import { isFreeFormClaim, isRequirementFullySatisfied } from './classification.js';
 import { buildReviewSummary, type SubmissionSummaryEntry } from './review-summary.js';
 
 export interface RenderReviewReportOptions {
@@ -106,6 +106,12 @@ function renderPriorityLine(entry: SubmissionSummaryEntry, requirements: Require
     if (concern) {
       const index = requirementIndex.get(concern.requirementId) ?? 0;
       lines.push(`⚠ ${describeConcern(byId.get(concern.requirementId), concern, index)}`);
+    } else {
+      const semanticReview = assessment.requirementAssessments.find((item) => isFreeFormClaim(byId.get(item.requirementId), item));
+      if (semanticReview) {
+        const index = requirementIndex.get(semanticReview.requirementId) ?? 0;
+        lines.push(`◐ Requirement ${index} claimed -- needs semantic review (not deterministically verifiable)`);
+      }
     }
   }
   lines.push(`→ ${ACTION_LINE[assessment.classification]}`);
@@ -130,8 +136,11 @@ function renderCompactBlock(entry: SubmissionSummaryEntry, requirements: Require
   }
 
   const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
+  const semanticReviewItems = assessment.requirementAssessments.filter((item) => isFreeFormClaim(byId.get(item.requirementId), item));
   const concerning = assessment.requirementAssessments.filter((item) => isConcerning(byId.get(item.requirementId), item));
-  const supported = assessment.requirementAssessments.filter((item) => !concerning.includes(item));
+  const supported = assessment.requirementAssessments.filter(
+    (item) => !concerning.includes(item) && !semanticReviewItems.includes(item),
+  );
 
   const flagLines = assessment.flags
     .filter((flag) => flag.severity === 'warning')
@@ -146,9 +155,16 @@ function renderCompactBlock(entry: SubmissionSummaryEntry, requirements: Require
     lines.push(`⚠ ${describeConcern(byId.get(item.requirementId), item, index)}`);
   }
 
-  const hiddenConcerns = concerning.length - shownConcerns.length;
+  const remainingCapAfterConcerns = Math.max(0, remainingCap - shownConcerns.length);
+  const shownSemanticReview = semanticReviewItems.slice(0, remainingCapAfterConcerns);
+  for (const item of shownSemanticReview) {
+    const index = requirementIndex.get(item.requirementId) ?? 0;
+    lines.push(`◐ Requirement ${index} claimed -- needs semantic review (not deterministically verifiable)`);
+  }
+
+  const hiddenConcerns = concerning.length - shownConcerns.length + (semanticReviewItems.length - shownSemanticReview.length);
   if (hiddenConcerns > 0) {
-    lines.push(`⚠ +${hiddenConcerns} more requirement concern(s) -- see --inspect ${entry.displayNumber}`);
+    lines.push(`⚠ +${hiddenConcerns} more requirement concern(s)/review item(s) -- see --inspect ${entry.displayNumber}`);
   }
 
   if (supported.length > 0 && flagLines.length === 0) {
@@ -194,7 +210,8 @@ export function renderReviewReport(result: ReviewResult, options: RenderReviewRe
   } else {
     lines.push(
       `  ${summary.requirementStatus.total} total · ${summary.requirementStatus.satisfied} satisfied · ` +
-        `${summary.requirementStatus.partial} partial · ${summary.requirementStatus.missing} missing`,
+        `${summary.requirementStatus.partial} partial · ${summary.requirementStatus.missing} missing · ` +
+        `${summary.requirementStatus.needsSemanticReview} needs semantic review`,
     );
   }
   if (options.generalRequirementsNotice) {

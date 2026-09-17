@@ -1,5 +1,5 @@
 import type { Requirement, RequirementAssessment, SubmissionAssessment, SubmissionFlag } from './types.js';
-import { allRequiredRequirementsSatisfied } from './classification.js';
+import { allRequiredRequirementsSatisfied, isFreeFormClaim } from './classification.js';
 
 export type RoutingTriggerKind =
   | 'evidence-relevance-uncertain'
@@ -91,12 +91,7 @@ export function routeForReasoning(
     }
 
     const requirement = byId.get(requirementAssessment.requirementId);
-    if (
-      requirement?.required &&
-      requirementAssessment.status === 'claimed' &&
-      !requirement.evidenceType &&
-      !(requirement.keywords && requirement.keywords.length > 0)
-    ) {
+    if (requirement?.required && isFreeFormClaim(requirement, requirementAssessment)) {
       // Free-form (no keywords, no evidenceType): the deterministic layer could only ever
       // reach "claimed" here by observing non-empty content, never by confirming the
       // response actually fulfills the instruction -- that judgment belongs to reasoning.

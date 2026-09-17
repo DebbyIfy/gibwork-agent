@@ -45,6 +45,21 @@ test('parseCli: live mode also carries --interactive through', () => {
   assert.equal(options.interactive, true);
 });
 
+test('parseCli: live mode leaves reasoningProvider unset when --reasoning-provider is not passed (no explicit preference)', () => {
+  const options = parseCli(['review', 'abc123', '--reasoning']) as LiveReviewCliOptions;
+  assert.equal(options.reasoningProvider, undefined);
+});
+
+test('parseCli: live mode carries an explicit --reasoning-provider through unchanged', () => {
+  const options = parseCli(['review', 'abc123', '--reasoning', '--reasoning-provider', 'api']) as LiveReviewCliOptions;
+  assert.equal(options.reasoningProvider, 'api');
+});
+
+test('parseCli: fixture mode still defaults reasoningProvider to "mock" when not passed (unchanged)', () => {
+  const options = parseCli(['review', '--fixture', 'fixtures/task.json']) as FixtureReviewCliOptions;
+  assert.equal(options.reasoningProvider, 'mock');
+});
+
 test('resolveInteractiveMode: --inspect always wins, even over an explicit --interactive and a real TTY', () => {
   assert.equal(resolveInteractiveMode({ inspect: '3', interactive: true }, true, true), false);
   assert.equal(resolveInteractiveMode({ inspect: '3' }, true, true), false);

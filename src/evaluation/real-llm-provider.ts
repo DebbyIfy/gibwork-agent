@@ -1,4 +1,3 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { ConfidenceLevel } from './types.js';
 import type {
   LLMProvider,
@@ -14,19 +13,25 @@ import type {
  * The ONLY file in this codebase that knows about a specific LLM vendor. Everything
  * else depends on the `LLMProvider` interface in llm.js. Swapping providers later
  * means adding a sibling file, not touching the evaluator, router, or orchestrator.
+ *
+ * Backed by OpenRouter (https://openrouter.ai), which exposes an OpenAI-compatible
+ * chat completions API in front of many underlying models -- including a free router
+ * model (`openrouter/free`) suitable for testing real semantic reasoning without a
+ * paid key. Talks to it with plain `fetch` (already a Node/runtime global) rather than
+ * an SDK: OpenRouter's API surface used here is one HTTP endpoint with a JSON body, so
+ * a dedicated client library would add a dependency without adding capability.
  */
 
-export const DEFAULT_MODEL = 'claude-haiku-4-5';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
+export const DEFAULT_MODEL = 'openrouter/free';
 const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_MAX_RETRIES = 1;
 const MAX_OUTPUT_TOKENS = 2048;
 
-export interface AnthropicLLMProviderOptions {
+export interface OpenRouterLLMProviderOptions {
   /** May be empty -- a missing key is reported as a clean provider error on first use, not a crash at construction. */
   apiKey: string;
   model?: string;
   timeoutMs?: number;
-  maxRetries?: number;
   /** Test-only hook: inject a fake fetch so tests never touch the real network. */
   fetch?: typeof fetch;
 }
@@ -51,7 +56,8 @@ Rules:
 - Be conservative when uncertain: prefer a lower confidence or a weaker verdict over an assertive one.
 - For every judgment, state what evidence (if any) it rests on.
 
-Respond only via the structured output format provided.`;
+Respond with a single JSON object, and nothing else -- no markdown code fences, no commentary before or after it -- matching exactly this JSON schema:
+`;
 
 const RELEVANCE_ITEM_SCHEMA = {
   type: 'object',
@@ -95,6 +101,10 @@ const REASONING_RESULT_SCHEMA = {
   required: ['relevance', 'contradiction', 'ambiguity'],
   additionalProperties: false,
 };
+
+function buildSystemPrompt(): string {
+  return `${SYSTEM_PROMPT}${JSON.stringify(REASONING_RESULT_SCHEMA)}`;
+}
 
 function buildUserPrompt(request: ReasoningRequest): string {
   const submissionText = request.relevance[0]?.claimText ?? request.contradiction?.submissionText ?? '';
@@ -143,6 +153,7 @@ function isRelevanceVerdict(value: unknown): value is RelevanceVerdict {
  * Validates the parsed JSON structurally before trusting any of it -- required fields,
  * enum values, arrays, and strings are all checked. Throws ProviderReasoningError (never
  * silently coerces malformed output into a confident-looking result) on any mismatch.
+ * Vendor-agnostic: this is the same validation regardless of which model answered.
  */
 function validateReasoningResult(raw: unknown, submissionId: string): ReasoningResult {
   if (typeof raw !== 'object' || raw === null) {
@@ -213,92 +224,137 @@ function validateReasoningResult(raw: unknown, submissionId: string): ReasoningR
   return { submissionId, relevance, ...(contradiction ? { contradiction } : {}), ambiguity };
 }
 
-/** Maps SDK failures to a message safe to print -- never a key, header, or raw error body. */
-function toProviderError(error: unknown): ProviderReasoningError {
-  if (error instanceof ProviderReasoningError) return error;
-  if (error instanceof Anthropic.AuthenticationError) {
+/**
+ * Some models wrap JSON in a ```json fence even when told not to. Stripping it is a
+ * parsing convenience, not a trust decision -- whatever comes out still goes through
+ * JSON.parse and full structural validation below.
+ */
+function extractJsonText(text: string): string {
+  const trimmed = text.trim();
+  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  return fenced ? fenced[1]!.trim() : trimmed;
+}
+
+interface OpenRouterErrorBody {
+  error?: { message?: string; code?: string | number };
+}
+
+/** Maps HTTP/network failures to a message safe to print -- never a key, header, or raw error body. */
+async function toProviderError(response: Response): Promise<ProviderReasoningError> {
+  let parsedMessage: string | undefined;
+  try {
+    const body = (await response.json()) as OpenRouterErrorBody;
+    parsedMessage = body.error?.message;
+  } catch {
+    // Response body wasn't JSON (or was empty) -- fall back to the status alone below.
+  }
+
+  if (response.status === 401 || response.status === 403) {
     return new ProviderReasoningError(
-      'Authentication with the LLM provider failed. Check that LLM_API_KEY is set to a valid key.',
-      { cause: error },
+      'Authentication with OpenRouter failed. Check that OPENROUTER_API_KEY is set to a valid key.',
     );
   }
-  if (error instanceof Anthropic.RateLimitError) {
-    return new ProviderReasoningError('The LLM provider rate-limited this request. Try again later.', { cause: error });
+  if (response.status === 429) {
+    return new ProviderReasoningError('OpenRouter rate-limited this request. Try again later.');
   }
-  if (error instanceof Anthropic.APIConnectionError) {
-    return new ProviderReasoningError('Could not reach the LLM provider (network error or timeout).', { cause: error });
-  }
-  if (error instanceof Anthropic.APIError) {
-    return new ProviderReasoningError(`The LLM provider returned an error (HTTP ${String(error.status)}).`, { cause: error });
-  }
-  return new ProviderReasoningError('The LLM provider request failed.', { cause: error });
+  return new ProviderReasoningError(
+    `OpenRouter returned an error (HTTP ${response.status})${parsedMessage ? `: ${parsedMessage}` : '.'}`,
+  );
+}
+
+interface OpenRouterChatResponse {
+  model?: string;
+  choices?: { message?: { content?: string | null }; finish_reason?: string }[];
 }
 
 /**
- * Real provider backed by the official Anthropic SDK (chosen per Anthropic's own
- * tooling guidance: use the official SDK for Claude API calls rather than raw fetch,
- * since it gives typed errors and first-class structured-output support). Never
- * approves, rejects, refunds, submits, or touches Gibwork/wallet state -- it has
+ * Real provider backed by OpenRouter's OpenAI-compatible chat completions endpoint.
+ * Never approves, rejects, refunds, submits, or touches Gibwork/wallet state -- it has
  * exactly one method, and that method only returns a judgment object.
  */
-export class AnthropicLLMProvider implements LLMProvider {
+export class OpenRouterLLMProvider implements LLMProvider {
   private readonly apiKey: string;
   private readonly model: string;
   private readonly timeoutMs: number;
-  private readonly maxRetries: number;
-  private readonly fetchImpl: typeof fetch | undefined;
+  private readonly fetchImpl: typeof fetch;
 
-  constructor(options: AnthropicLLMProviderOptions) {
+  constructor(options: OpenRouterLLMProviderOptions) {
     this.apiKey = options.apiKey;
     this.model = options.model && options.model.length > 0 ? options.model : DEFAULT_MODEL;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
-    this.fetchImpl = options.fetch;
+    this.fetchImpl = options.fetch ?? fetch;
   }
 
   async reason(request: ReasoningRequest): Promise<ReasoningResult> {
     if (!this.apiKey) {
       throw new ProviderReasoningError(
-        'LLM_API_KEY is not set. Set it in your environment, or copy .env.example to .env and run with ' +
-          '`node --env-file=.env dist/index.js ...` (after `npm run build`).',
+        'OPENROUTER_API_KEY is not set. Set it in your environment, or copy .env.example to .env at the project ' +
+          'root -- it is loaded automatically.',
       );
     }
 
-    const client = new Anthropic({
-      apiKey: this.apiKey,
-      maxRetries: this.maxRetries,
-      ...(this.fetchImpl ? { fetch: this.fetchImpl } : {}),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
 
-    let text: string;
+    let response: Response;
     try {
-      const response = await client.messages.create(
-        {
-          model: this.model,
-          max_tokens: MAX_OUTPUT_TOKENS,
-          system: SYSTEM_PROMPT,
-          messages: [{ role: 'user', content: buildUserPrompt(request) }],
-          output_config: { format: { type: 'json_schema', schema: REASONING_RESULT_SCHEMA } },
+      response = await this.fetchImpl(`${OPENROUTER_BASE_URL}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
         },
-        { timeout: this.timeoutMs },
-      );
-
-      if (response.stop_reason === 'refusal') {
-        throw new ProviderReasoningError('The model declined to process this request.');
-      }
-
-      const textBlock = response.content.find((block): block is Anthropic.TextBlock => block.type === 'text');
-      if (!textBlock) {
-        throw new ProviderReasoningError('Provider response contained no text output.');
-      }
-      text = textBlock.text;
+        body: JSON.stringify({
+          model: this.model,
+          messages: [
+            { role: 'system', content: buildSystemPrompt() },
+            { role: 'user', content: buildUserPrompt(request) },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0,
+          max_tokens: MAX_OUTPUT_TOKENS,
+        }),
+        signal: controller.signal,
+      });
     } catch (error) {
-      throw toProviderError(error);
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new ProviderReasoningError('Could not reach OpenRouter in time (request timed out).', { cause: error });
+      }
+      throw new ProviderReasoningError('Could not reach OpenRouter (network error).', { cause: error });
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!response.ok) {
+      throw await toProviderError(response);
+    }
+
+    let body: OpenRouterChatResponse;
+    try {
+      body = (await response.json()) as OpenRouterChatResponse;
+    } catch (error) {
+      throw new ProviderReasoningError('OpenRouter response was not valid JSON.', { cause: error });
+    }
+
+    if (body.model) {
+      // openrouter/free (and other multi-model routers) may hand the request to any
+      // underlying model -- surfacing which one actually answered is purely informational,
+      // advisory-only output, never something downstream evaluation logic reads.
+      console.log(`[OpenRouter] request handled by model: ${body.model}`);
+    }
+
+    const choice = body.choices?.[0];
+    if (choice?.finish_reason === 'content_filter') {
+      throw new ProviderReasoningError('The model declined to process this request (content filter).');
+    }
+    const text = choice?.message?.content;
+    if (typeof text !== 'string' || text.length === 0) {
+      throw new ProviderReasoningError('OpenRouter response contained no message content.');
     }
 
     let raw: unknown;
     try {
-      raw = JSON.parse(text);
+      raw = JSON.parse(extractJsonText(text));
     } catch (error) {
       throw new ProviderReasoningError('Provider returned invalid JSON.', { cause: error });
     }

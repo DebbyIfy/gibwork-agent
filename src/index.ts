@@ -14,7 +14,7 @@ import { renderReviewReport, renderReasoningSummary, renderSubmissionInspection 
 import { buildReviewSummary, findEntryByRef } from './evaluation/review-summary.js';
 import { applyReasoning, type SubmissionReasoning } from './evaluation/reasoning.js';
 import { FixtureMockLLMProvider } from './evaluation/mock-llm-provider.js';
-import { AnthropicLLMProvider, DEFAULT_MODEL } from './evaluation/real-llm-provider.js';
+import { OpenRouterLLMProvider, DEFAULT_MODEL } from './evaluation/real-llm-provider.js';
 import type { LLMProvider } from './evaluation/llm.js';
 import { GithubEvidenceAdapter, findInspectablePullRequestEvidence } from './evidence/github.js';
 import { renderGithubEvidenceSection, type GithubEvidenceOutcome } from './evidence/report.js';
@@ -22,6 +22,36 @@ import { toReviewSubmission, toReviewTask } from './evaluation/gibwork-adapter.j
 import { HtmlListRequirementExtractor, MAX_EXTRACTED_REQUIREMENTS } from './evaluation/html-requirement-extractor.js';
 import type { ReasoningProvider } from './types.js';
 import type { Requirement, ReviewSubmission, ReviewTask, SubmissionAssessment } from './evaluation/types.js';
+
+/**
+ * Anchored to this file's own location, not the caller's current working directory, so
+ * `gibwork-agent review <task>` (the linked/installed bin) picks up OPENROUTER_API_KEY/
+ * OPENROUTER_MODEL regardless of which directory it's invoked from. `../.env` resolves to
+ * the project root whether this runs as compiled dist/index.js or as src/index.ts under
+ * tsx, since both sit one level below the root, next to .env.
+ */
+const PROJECT_ENV_FILE_PATH = new URL('../.env', import.meta.url);
+
+/**
+ * Loads a .env file (this project's own by default) into process.env. A missing file is
+ * expected and fine -- fixture mode and non-reasoning runs need no environment variables
+ * at all -- so the one error process.loadEnvFile() throws for a missing/unreadable file
+ * is swallowed here rather than crashing the whole CLI over an optional convenience. Uses
+ * Node's own built-in loader (available since Node 20.12, already within this project's
+ * stated Node prerequisite) instead of adding a dependency. Never logs the file's path or
+ * contents. Like Node's --env-file, this never overwrites a variable already present in
+ * the environment -- an explicitly exported shell variable still wins over whatever .env
+ * contains. Exported (and path-parameterized) purely so tests can point it at a temporary
+ * fixture file instead of this project's real .env.
+ */
+export function loadProjectEnvFile(envFilePath: URL | string = PROJECT_ENV_FILE_PATH): void {
+  try {
+    process.loadEnvFile(envFilePath);
+  } catch {
+    // No .env at this path (or it couldn't be read) -- continue without it.
+  }
+}
+loadProjectEnvFile();
 
 /**
  * Only ever describes what actually happened for THIS run (fallback vs. truncation vs.
@@ -49,13 +79,61 @@ function buildRequirementsNotice(extractor: HtmlListRequirementExtractor): strin
 function buildReasoningProvider(kind: ReasoningProvider): LLMProvider {
   if (kind === 'mock') return new FixtureMockLLMProvider();
 
-  const apiKey = process.env.LLM_API_KEY ?? '';
-  const model = process.env.LLM_MODEL;
+  const apiKey = process.env.OPENROUTER_API_KEY ?? '';
+  const model = process.env.OPENROUTER_MODEL;
   console.log(
-    `\n--reasoning-provider api: using the real Anthropic API (model: ${model && model.length > 0 ? model : DEFAULT_MODEL}). ` +
+    `\n--reasoning-provider api: using OpenRouter (model: ${model && model.length > 0 ? model : DEFAULT_MODEL}). ` +
       'This makes real network calls and may incur cost -- only routed submissions are sent, one batched call each.\n',
   );
-  return new AnthropicLLMProvider({ apiKey, ...(model ? { model } : {}) });
+  return new OpenRouterLLMProvider({ apiKey, ...(model ? { model } : {}) });
+}
+
+/**
+ * Resolves which provider LIVE interactive mode's on-demand "Run AI reasoning" action
+ * actually uses. An explicit --reasoning-provider always wins outright, unchanged from
+ * today. Only when the user passed no explicit preference does this fill in a default:
+ * the real OpenRouter provider if OPENROUTER_API_KEY is configured, otherwise the local
+ * mock -- so picking "Run AI reasoning" after a plain `gibwork-agent review <task>` uses
+ * real reasoning automatically once a key is configured, instead of always silently
+ * falling back to the mock. Fixture/offline mode never calls this: it keeps defaulting to
+ * 'mock' unconditionally at the CLI-parsing layer (see cli.ts), since fixture mode's whole
+ * point is to run fully offline by default regardless of what's configured in the
+ * environment. This only decides *which* provider is selected -- it never builds one
+ * itself (buildReasoningProvider() above remains the single provider-construction point)
+ * and has no bearing on score/classification/confidence, which are computed long before
+ * this is even consulted.
+ */
+export function resolveInteractiveReasoningProvider(
+  explicit: ReasoningProvider | undefined,
+  hasOpenRouterKey: boolean,
+): ReasoningProvider {
+  if (explicit) return explicit;
+  return hasOpenRouterKey ? 'api' : 'mock';
+}
+
+/**
+ * Resolves the effective provider via resolveInteractiveReasoningProvider() above and,
+ * only when the user left --reasoning-provider unset, announces which one was picked and
+ * why -- an explicit choice is exactly what was asked for and needs no extra explanation.
+ * Split out from runLiveReview() specifically so this decision+announcement is directly
+ * unit-testable without driving the interactive readline loop (which talks to real
+ * stdin) end-to-end -- `log` defaults to console.log but tests inject a capturing fake.
+ */
+export function prepareInteractiveReasoningProvider(
+  explicit: ReasoningProvider | undefined,
+  hasOpenRouterKey: boolean,
+  log: (message: string) => void = console.log,
+): ReasoningProvider {
+  const provider = resolveInteractiveReasoningProvider(explicit, hasOpenRouterKey);
+  if (!explicit) {
+    log(
+      provider === 'api'
+        ? '\nOPENROUTER_API_KEY is configured -- "Run AI reasoning" will use the real OpenRouter provider.\n'
+        : '\nReal reasoning is not configured -- OPENROUTER_API_KEY is not set, so "Run AI reasoning" will use ' +
+            'the local mock provider instead. Set OPENROUTER_API_KEY (see .env.example) to enable real semantic reasoning.\n',
+    );
+  }
+  return provider;
 }
 
 async function runEvidenceInspection(submissions: ReviewSubmission[], adapter: GithubEvidenceAdapter): Promise<void> {
@@ -226,7 +304,8 @@ interface RunLiveReviewOptions {
   page?: number;
   limit?: number;
   withReasoning: boolean;
-  reasoningProvider: ReasoningProvider;
+  /** Undefined means "no explicit --reasoning-provider" -- see resolveInteractiveReasoningProvider(). */
+  reasoningProvider?: ReasoningProvider;
   inspectEvidence: boolean;
   inspect?: string;
   interactive: boolean;
@@ -238,7 +317,7 @@ interface RunLiveReviewOptions {
  * pipeline. `liveTask` must already have been resolved via getTask() -- this function
  * only ever calls submissions.list(), never a write/financial endpoint.
  */
-async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, options: RunLiveReviewOptions): Promise<void> {
+export async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, options: RunLiveReviewOptions): Promise<void> {
   console.log(
     `=== LIVE REVIEW -- deterministic evaluation of real Gibwork stage submissions for task ${liveTask.id} ` +
       '(read-only: no approve/reject/refund/create/sign call exists in this tool) ===\n',
@@ -296,8 +375,11 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
       generalRequirementsNotice: buildRequirementsNotice(requirementExtractor),
       // Interactive mode never eagerly reasons about every routed submission -- reasoning
       // there is on-demand, per submission, only if the user explicitly asks (see below).
+      // Inert when interactive (withReasoning is forced false above), so the plain 'mock'
+      // default here never affects the interactive path -- that path resolves its own
+      // effective provider separately, below.
       withReasoning: options.interactive ? false : options.withReasoning,
-      reasoningProvider: options.reasoningProvider,
+      reasoningProvider: options.reasoningProvider ?? 'mock',
       ...(options.inspect ? { inspect: options.inspect } : {}),
     },
     buildReasoningProvider,
@@ -309,6 +391,9 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
   }
 
   if (options.interactive) {
+    const hasOpenRouterKey = Boolean(process.env.OPENROUTER_API_KEY);
+    const interactiveReasoningProvider = prepareInteractiveReasoningProvider(options.reasoningProvider, hasOpenRouterKey);
+
     const { ask, close } = createReadlineAsk();
     try {
       await runInteractiveReview(
@@ -316,7 +401,7 @@ async function runLiveReview(client: GibworkClient, liveTask: TaskDetails, optio
         requirements,
         submissions,
         assessments,
-        options.reasoningProvider,
+        interactiveReasoningProvider,
         { ask, buildProvider: buildReasoningProvider },
         githubAdapter,
       );
@@ -375,7 +460,7 @@ async function main(): Promise<void> {
     ...(cli.page ? { page: cli.page } : {}),
     ...(cli.limit ? { limit: cli.limit } : {}),
     withReasoning: cli.reasoning,
-    reasoningProvider: cli.reasoningProvider,
+    ...(cli.reasoningProvider ? { reasoningProvider: cli.reasoningProvider } : {}),
     inspectEvidence: cli.inspectEvidence,
     ...(cli.inspect ? { inspect: cli.inspect } : {}),
     interactive: resolveInteractiveMode(cli, Boolean(process.stdin.isTTY), Boolean(process.stdout.isTTY)),

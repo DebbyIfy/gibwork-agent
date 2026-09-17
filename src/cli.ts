@@ -52,8 +52,9 @@ Options:
   --reasoning-provider <mock|api>
                       Which reasoning layer to use with --reasoning. "mock"
                       (default): local, deterministic, no network, no API key.
-                      "api": real Anthropic API call, requires LLM_API_KEY --
-                      never enabled unless you explicitly ask for it.
+                      "api": real OpenRouter API call, requires
+                      OPENROUTER_API_KEY -- never enabled unless you
+                      explicitly ask for it.
   --inspect-evidence  Inspect any GitHub pull request evidence via the \`gh\`
                       CLI (read-only: gh pr view only, no write/merge/comment
                       operation exists). Advisory display only -- never
@@ -178,9 +179,12 @@ export function parseCli(argv: string[]): ReviewCliOptions {
     mode: 'live',
     taskId,
     reasoning: values.reasoning ?? false,
-    reasoningProvider: (values['reasoning-provider'] as ReasoningProvider) ?? 'mock',
     inspectEvidence: values['inspect-evidence'] ?? false,
   };
+  // Left unset (rather than defaulted to 'mock' here) when not explicitly passed, so live
+  // mode can tell "no preference" apart from "user explicitly chose mock" -- see
+  // resolveInteractiveReasoningProvider() in index.ts.
+  if (values['reasoning-provider']) options.reasoningProvider = values['reasoning-provider'] as ReasoningProvider;
   if (values.submission) options.submissionId = values.submission;
   if (values.status) options.status = values.status as SubmissionStatus;
   if (values.page) options.page = Number(values.page);

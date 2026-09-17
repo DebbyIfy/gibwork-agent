@@ -1,9 +1,14 @@
 import type { Requirement, RequirementAssessment, ReviewResult, SubmissionAssessment } from './types.js';
+import { isFreeFormClaim } from './classification.js';
 
 export interface RequirementStatusSummary {
   total: number;
   satisfied: number;
   partial: number;
+  /** A non-empty response was given to a requirement with no evidence type and no
+   *  authored keywords -- deterministically unverifiable either way; a human's semantic
+   *  read is needed. Never folded into `satisfied`, which would overstate it. */
+  needsSemanticReview: number;
   missing: number;
 }
 
@@ -44,20 +49,28 @@ export interface ReviewSummary {
 const PRIORITY_REVIEW_CAP = 5;
 const TOP_SUBMISSIONS_CAP = 5;
 
-type RequirementBucket = 'satisfied' | 'partial' | 'missing';
+type RequirementBucket = 'satisfied' | 'partial' | 'needsSemanticReview' | 'missing';
 
 function bucketRequirementAssessment(requirement: Requirement | undefined, assessment: RequirementAssessment): RequirementBucket {
   if (assessment.status === 'verified') return 'satisfied';
-  if (assessment.status === 'claimed') return requirement?.evidenceType ? 'partial' : 'satisfied';
+  if (assessment.status === 'claimed') {
+    // A free-form claim found nothing concrete to match against -- it is not
+    // deterministically "satisfied", it needs a human's semantic read.
+    if (isFreeFormClaim(requirement, assessment)) return 'needsSemanticReview';
+    return requirement?.evidenceType ? 'partial' : 'satisfied';
+  }
   if (assessment.status === 'partially_verified') return 'partial';
   return 'missing'; // not_found | contradicted
 }
 
 /** Ties break toward the worse bucket -- this summary must never overstate how well a
- *  requirement is typically evidenced across the submissions actually received. */
+ *  requirement is typically evidenced across the submissions actually received. A
+ *  free-form claim has no evidence backing it at all (unlike partial), so it ranks
+ *  worse than partial but better than an outright miss. */
 function modeBucket(counts: Record<RequirementBucket, number>): RequirementBucket {
-  const max = Math.max(counts.missing, counts.partial, counts.satisfied);
+  const max = Math.max(counts.missing, counts.needsSemanticReview, counts.partial, counts.satisfied);
   if (counts.missing === max) return 'missing';
+  if (counts.needsSemanticReview === max) return 'needsSemanticReview';
   if (counts.partial === max) return 'partial';
   return 'satisfied';
 }
@@ -72,11 +85,17 @@ export function summarizeRequirementStatus(
   requirements: Requirement[],
   assessments: SubmissionAssessment[],
 ): RequirementStatusSummary {
-  const summary: RequirementStatusSummary = { total: requirements.length, satisfied: 0, partial: 0, missing: 0 };
+  const summary: RequirementStatusSummary = {
+    total: requirements.length,
+    satisfied: 0,
+    partial: 0,
+    needsSemanticReview: 0,
+    missing: 0,
+  };
   if (assessments.length === 0) return summary;
 
   for (const requirement of requirements) {
-    const counts: Record<RequirementBucket, number> = { satisfied: 0, partial: 0, missing: 0 };
+    const counts: Record<RequirementBucket, number> = { satisfied: 0, partial: 0, needsSemanticReview: 0, missing: 0 };
     for (const assessment of assessments) {
       const requirementAssessment = assessment.requirementAssessments.find(
         (item) => item.requirementId === requirement.id,

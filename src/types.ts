@@ -13,8 +13,14 @@ export interface LiveReviewCliOptions {
   /** Opt-in only: routes unresolved cases through a reasoning layer. Live mode only supports
    *  this alongside the full-review pipeline, not the raw --submission detail view. */
   reasoning: boolean;
-  /** 'mock' (default, no network/key) or 'api' (real provider, requires LLM_API_KEY). */
-  reasoningProvider: ReasoningProvider;
+  /** Set only when the user explicitly passes --reasoning-provider; undefined means "no
+   *  explicit preference". Non-interactive live --reasoning still defaults this to 'mock'
+   *  when unset (unchanged). Interactive live mode instead auto-resolves an unset value to
+   *  'api' when OPENROUTER_API_KEY is configured, 'mock' otherwise -- see
+   *  resolveInteractiveReasoningProvider() in index.ts. Fixture mode is unaffected by any
+   *  of this: it keeps defaulting to 'mock' unconditionally (see cli.ts), since fixture
+   *  mode's whole point is to run fully offline by default. */
+  reasoningProvider?: ReasoningProvider;
   /** Opt-in only: inspects GitHub PR evidence via the `gh` CLI (read-only). Advisory display only. */
   inspectEvidence: boolean;
   /** Opt-in only: shows the full evidence-backed breakdown for one submission (by its

@@ -14,7 +14,7 @@
     "review:fixture": "tsx src/index.ts review --fixture fixtures/task.json",
     "review:fixture:challenging": "tsx src/index.ts review --fixture fixtures/challenging-task.json",
     "review:fixture:reasoning": "tsx src/index.ts review --fixture fixtures/challenging-task.json --reasoning",
-    "review:fixture:reasoning:api": "node --env-file=.env dist/index.js review --fixture fixtures/challenging-task.json --reasoning --reasoning-provider api",
+    "review:fixture:reasoning:api": "node dist/index.js review --fixture fixtures/challenging-task.json --reasoning --reasoning-provider api",
     "review:fixture:evidence": "tsx src/index.ts review --fixture fixtures/challenging-task.json --inspect-evidence",
     "test": "node --import tsx --test src/*.test.ts src/evaluation/*.test.ts src/evidence/*.test.ts"
   },
@@ -22,7 +22,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.125.0",
     "@gibwork/sdk": "^0.2.0"
   },
   "devDependencies": {

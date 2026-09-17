@@ -29,8 +29,8 @@ Human review
 
 ## Installation
 
-**Prerequisites:** Node.js 20.6 or later (needed for `node --env-file`;
-developed and tested on Node 22) and npm.
+**Prerequisites:** Node.js 20.12 or later (needed for `process.loadEnvFile()`,
+used to load `.env` automatically; developed and tested on Node 22) and npm.
 
 ```
 git clone https://github.com/DebbyIfy/gibwork-agent.git
@@ -259,28 +259,38 @@ passed) needs no API key and makes no network call -- it returns canned
 responses for a few known fixture IDs and a conservative "uncertain" fallback
 for everything else, purely to demonstrate the routing plumbing.
 
-To use the **real** Anthropic API instead:
+To use the **real** OpenRouter API instead:
 
-1. Copy `.env.example` to `.env` and set `LLM_API_KEY` (get one at
-   [console.anthropic.com](https://console.anthropic.com/)). `LLM_MODEL` is
-   optional and defaults to `claude-haiku-4-5` -- this reasoning layer asks
-   narrow, bounded questions over compact input, so a small/fast/cheap model
-   is the appropriate default. Set it to something larger (e.g.
-   `claude-sonnet-5`, `claude-opus-4-8`) for higher-quality reasoning at
-   higher cost.
+1. Copy `.env.example` to `.env` (at the project root) and set
+   `OPENROUTER_API_KEY` (get one at
+   [openrouter.ai/keys](https://openrouter.ai/keys)). `OPENROUTER_MODEL` is
+   optional and defaults to `openrouter/free`, OpenRouter's free multi-model
+   router -- useful for testing real semantic reasoning without a paid key.
+   Set it to a specific model slug (e.g. `anthropic/claude-haiku-4-5`,
+   `openai/gpt-4o-mini`) for a fixed, non-routed model instead.
 2. Build once: `npm run build`.
-3. Run with the env file loaded:
+3. Run normally -- the project's own `.env` is loaded automatically (see
+   below), no flag required:
 
    ```
-   node --env-file=.env dist/index.js review --fixture fixtures/challenging-task.json --reasoning --reasoning-provider api
+   gibwork-agent review <task-id> --reasoning --reasoning-provider api
+   node dist/index.js review --fixture fixtures/challenging-task.json --reasoning --reasoning-provider api
    ```
 
    or use the bundled script: `npm run review:fixture:reasoning:api`.
 
 `.env` is git-ignored (see `.gitignore`) -- never commit real credentials.
 `--reasoning-provider api` is never enabled by default; you have to pass it
-explicitly, and `LLM_API_KEY` has to be set, or the reasoning layer reports
-itself unavailable per-submission (see below) rather than crashing.
+explicitly, and `OPENROUTER_API_KEY` has to be set, or the reasoning layer
+reports itself unavailable per-submission (see below) rather than crashing.
+
+`.env` is loaded once at startup via Node's built-in `process.loadEnvFile()`
+(no extra dependency), anchored to the project's own directory rather than
+wherever you happen to run `gibwork-agent` from -- so the linked `gibwork-agent`
+command picks it up the same way `node dist/index.js` does. A missing `.env`
+is fine (fixture mode and non-reasoning runs need no environment variables at
+all); an already-exported shell variable still takes precedence over `.env`,
+same as Node's `--env-file` flag.
 
 ## Provider architecture
 
@@ -295,11 +305,11 @@ interface LLMProvider {
 - `src/evaluation/mock-llm-provider.ts` -- deterministic, offline, used by
   default and by all fixture tests.
 - `src/evaluation/real-llm-provider.ts` -- the only file in this codebase that
-  knows about a specific vendor (Anthropic). Uses the official
-  `@anthropic-ai/sdk` rather than raw `fetch`, since the SDK gives typed error
-  classes and first-class structured-output support. Swapping to a different
-  vendor later means adding a sibling file, not touching the evaluator,
-  router, or orchestrator.
+  knows about a specific vendor (OpenRouter). Talks to OpenRouter's
+  OpenAI-compatible chat completions endpoint with plain `fetch` rather than
+  an SDK -- one HTTP endpoint with a JSON body doesn't need a client library.
+  Swapping to a different vendor later means adding a sibling file, not
+  touching the evaluator, router, or orchestrator.
 - `src/evaluation/reasoning.ts`'s `applyReasoning()` is the **single**
   orchestration point that ever calls a provider. It decides whether to call
   (via the router), builds the compact request, and catches any provider
@@ -307,14 +317,16 @@ interface LLMProvider {
 
 ### Structured output and validation
 
-The real provider requests `output_config.format: { type: 'json_schema', schema }`
-from the Messages API, constraining the model's response to a fixed JSON
-shape (relevance verdicts, an optional contradiction result, an ambiguity
-signal). The parsed JSON is then **independently validated** in
-`real-llm-provider.ts` before being trusted -- every required field, enum
-value (verdict, confidence), array, and string is checked explicitly. A
-schema-conformant response is not assumed to be well-formed just because the
-API accepted the request; if validation fails for any reason, a
+The real provider requests `response_format: { type: 'json_object' }` from
+OpenRouter's chat completions endpoint and includes the exact expected JSON
+schema (relevance verdicts, an optional contradiction result, an ambiguity
+signal) in the system prompt, since `openrouter/free` can route to any of
+several underlying free models and not all of them support strict
+`json_schema`-constrained output. The parsed JSON is then **independently
+validated** in `real-llm-provider.ts` before being trusted -- every required
+field, enum value (verdict, confidence), array, and string is checked
+explicitly. A response is not assumed to be well-formed just because the API
+accepted the request; if validation fails for any reason, a
 `ProviderReasoningError` is thrown rather than silently coercing a partial or
 malformed object into a confident-looking result.
 
