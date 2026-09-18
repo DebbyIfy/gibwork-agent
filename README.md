@@ -259,15 +259,20 @@ passed) needs no API key and makes no network call -- it returns canned
 responses for a few known fixture IDs and a conservative "uncertain" fallback
 for everything else, purely to demonstrate the routing plumbing.
 
-To use the **real** OpenRouter API instead:
+To use the **real OpenRouter provider** instead:
 
 1. Copy `.env.example` to `.env` (at the project root) and set
    `OPENROUTER_API_KEY` (get one at
-   [openrouter.ai/keys](https://openrouter.ai/keys)). `OPENROUTER_MODEL` is
+   [openrouter.ai/keys](https://openrouter.ai/keys)).
+
+   The current real provider is **OpenRouter**. `OPENROUTER_MODEL` is
    optional and defaults to `openrouter/free`, OpenRouter's free multi-model
-   router -- useful for testing real semantic reasoning without a paid key.
-   Set it to a specific model slug (e.g. `anthropic/claude-haiku-4-5`,
-   `openai/gpt-4o-mini`) for a fixed, non-routed model instead.
+   router. You can also set it to a specific OpenRouter model slug (for example,
+   `anthropic/claude-haiku-4-5` or `openai/gpt-4o-mini`) when you want to use a
+   fixed model.
+
+   Direct API integrations with individual model providers are not currently
+   included; model selection is handled through OpenRouter.
 2. Build once: `npm run build`.
 3. Run normally -- the project's own `.env` is loaded automatically (see
    below), no flag required:
